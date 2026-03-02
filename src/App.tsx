@@ -113,7 +113,6 @@ function App() {
     if (currentLevelIndex < LEVELS.length - 1) {
       setCurrentLevelIndex(prev => prev + 1);
     } else {
-      alert("🎉 TCC Finalizado com sucesso!");
       setCurrentLevelIndex(0);
     }
   };
