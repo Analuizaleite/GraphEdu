@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Circle, Play, Trash2, MousePointer2, MoveUpRight, RotateCcw, ArrowRightLeft, ArrowRight, Eraser, Gamepad2, Wrench } from 'lucide-react';
 import { generateBFSSteps } from './algorithms/bfs';
 import { generateDFSSteps } from './algorithms/dfs';
-import { performRightRotation } from './algorithms/avl';
-import { getBalancedEdges } from './algorithms/balancing';
+import { performRightRotation, performLeftRotation, performLRRotation, performRLRotation } from './algorithms/avl';
+import { getBalancedEdges, detectAVLCase } from './algorithms/balancing';
 
 interface Node { id: number; x: number; y: number; }
 interface Edge { sourceId: number; targetId: number; weight: number; }
@@ -76,7 +76,7 @@ function App() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [isDirected, setIsDirected] = useState(false);
-  const [activeTool, setActiveTool] = useState<'cursor' | 'add-node' | 'add-edge' | 'delete'>('add-node');
+  const [activeTool, setActiveTool] = useState<'cursor' | 'add-node' | 'add-edge' | 'delete' | 'select-rotation'>('add-node');
   const [connectionSourceId, setConnectionSourceId] = useState<number | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<number | null>(null);
 
@@ -92,6 +92,13 @@ function App() {
   const [isAnimating, setIsAnimating] = useState(false);
   const [visitedNodes, setVisitedNodes] = useState<Set<number>>(new Set());
   const [queueNodes, setQueueNodes] = useState<Set<number>>(new Set());
+  
+  // --- ESTADO DE ANIMAÇÃO DE ROTAÇÃO AVL ---
+  const [isRotating, setIsRotating] = useState(false);
+  const rotationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // --- ESTADO DE SELEÇÃO DE NÓS PARA ROTAÇÃO ---
+  const [selectedNodesForRotation, setSelectedNodesForRotation] = useState<number[]>([]);
 
   // === TIMER DA SPLASH SCREEN ===
   useEffect(() => {
@@ -111,6 +118,18 @@ function App() {
       resetGame();
     }
   }, [appMode, currentLevelIndex]);
+
+
+useEffect(() => {
+  // Limpa timeout ao desmontar
+  return () => {
+    if (rotationTimeoutRef.current) {
+      clearTimeout(rotationTimeoutRef.current);
+    }
+  };
+}, []);
+
+
 
   const resetGame = () => {
     setLives(3);
@@ -168,6 +187,137 @@ function App() {
     }
   };
 
+  // --- LÓGICA DE ROTAÇÃO MANUAL (SANDBOX) ---
+  const handleManualRotation = (rotationType: 'LL' | 'RR' | 'LR' | 'RL') => {
+    if (selectedNodesForRotation.length !== 3) {
+      alert("Selecione exatamente 3 nós para aplicar a rotação.");
+      return;
+    }
+
+    const [rootId, leftId, rightId] = selectedNodesForRotation;
+    const selectedNodes = nodes.filter(n => selectedNodesForRotation.includes(n.id));
+    
+    // Calculate center position for the balanced structure
+    const centerX = selectedNodes.reduce((sum, n) => sum + n.x, 0) / 3;
+    const centerY = selectedNodes.reduce((sum, n) => sum + n.y, 0) / 3;
+
+    // Determine the new parent for each rotation type
+    let newParentId: number;
+    let oldParentId: number;
+    
+    switch (rotationType) {
+      case 'LL':
+      case 'RR':
+        newParentId = rootId;
+        oldParentId = rootId;
+        break;
+      case 'LR':
+        newParentId = leftId;
+        oldParentId = rootId;
+        break;
+      case 'RL':
+        newParentId = rightId;
+        oldParentId = rootId;
+        break;
+      default:
+        return;
+    }
+
+    // Collect external edges and redirect them to the new parent
+    const redirectedEdges: Edge[] = [];
+    edges.forEach(edge => {
+      // Skip edges between selected nodes (they'll be recreated)
+      if (selectedNodesForRotation.includes(edge.sourceId) && selectedNodesForRotation.includes(edge.targetId)) {
+        return;
+      }
+      
+      // If old parent is involved, redirect to new parent
+      if (edge.sourceId === oldParentId) {
+        redirectedEdges.push({ ...edge, sourceId: newParentId });
+      } else if (edge.targetId === oldParentId) {
+        redirectedEdges.push({ ...edge, targetId: newParentId });
+      }
+    });
+
+    // Keep edges that don't involve the selected nodes at all
+    const externalEdges = edges.filter(e => 
+      !selectedNodesForRotation.includes(e.sourceId) && 
+      !selectedNodesForRotation.includes(e.targetId)
+    );
+
+    let newNodes: Node[];
+    let newEdges: Edge[];
+
+    switch (rotationType) {
+      case 'LL':
+        // root becomes the new root, left stays, right becomes child
+        newNodes = nodes.map(node => {
+          if (node.id === rootId) return { ...node, x: centerX, y: centerY - 80 };
+          if (node.id === leftId) return { ...node, x: centerX - 80, y: centerY + 40 };
+          if (node.id === rightId) return { ...node, x: centerX + 80, y: centerY + 40 };
+          return node;
+        });
+        // Combine external edges + redirected edges + new balanced edges
+        newEdges = [
+          ...externalEdges,
+          ...redirectedEdges,
+          { sourceId: rootId, targetId: leftId, weight: 1 },
+          { sourceId: rootId, targetId: rightId, weight: 1 }
+        ];
+        break;
+      case 'RR':
+        newNodes = nodes.map(node => {
+          if (node.id === rootId) return { ...node, x: centerX, y: centerY - 80 };
+          if (node.id === leftId) return { ...node, x: centerX - 80, y: centerY + 40 };
+          if (node.id === rightId) return { ...node, x: centerX + 80, y: centerY + 40 };
+          return node;
+        });
+        newEdges = [
+          ...externalEdges,
+          ...redirectedEdges,
+          { sourceId: rootId, targetId: leftId, weight: 1 },
+          { sourceId: rootId, targetId: rightId, weight: 1 }
+        ];
+        break;
+      case 'LR':
+        // For LR: left node becomes root, root becomes right child
+        newNodes = nodes.map(node => {
+          if (node.id === leftId) return { ...node, x: centerX, y: centerY - 80 };
+          if (node.id === rootId) return { ...node, x: centerX + 80, y: centerY + 40 };
+          if (node.id === rightId) return { ...node, x: centerX - 80, y: centerY + 40 };
+          return node;
+        });
+        newEdges = [
+          ...externalEdges,
+          ...redirectedEdges,
+          { sourceId: leftId, targetId: rightId, weight: 1 },
+          { sourceId: leftId, targetId: rootId, weight: 1 }
+        ];
+        break;
+      case 'RL':
+        // For RL: right node becomes root, root becomes left child
+        newNodes = nodes.map(node => {
+          if (node.id === rightId) return { ...node, x: centerX, y: centerY - 80 };
+          if (node.id === rootId) return { ...node, x: centerX - 80, y: centerY + 40 };
+          if (node.id === leftId) return { ...node, x: centerX + 80, y: centerY + 40 };
+          return node;
+        });
+        newEdges = [
+          ...externalEdges,
+          ...redirectedEdges,
+          { sourceId: rightId, targetId: leftId, weight: 1 },
+          { sourceId: rightId, targetId: rootId, weight: 1 }
+        ];
+        break;
+      default:
+        return;
+    }
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+    setSelectedNodesForRotation([]);
+  };
+
   // --- LÓGICA DO MODO SANDBOX RESTAURADA ---
   const renderAdjacencyList = () => {
     return nodes.map(node => {
@@ -221,6 +371,19 @@ function App() {
     e.stopPropagation();
     if (appMode === 'game') { handleGameNodeClick(nodeId); return; }
     if (activeTool === 'delete') { deleteNode(nodeId); return; }
+    
+    // Handle node selection for rotation
+    if (activeTool === 'select-rotation') {
+      if (selectedNodesForRotation.includes(nodeId)) {
+        // Deselect node
+        setSelectedNodesForRotation(selectedNodesForRotation.filter(id => id !== nodeId));
+      } else if (selectedNodesForRotation.length < 3) {
+        // Select node (max 3)
+        setSelectedNodesForRotation([...selectedNodesForRotation, nodeId]);
+      }
+      return;
+    }
+    
     if (activeTool === 'add-edge') {
       if (connectionSourceId === null) setConnectionSourceId(nodeId);
       else {
@@ -236,7 +399,7 @@ function App() {
     }
   };
 
-  const clearAll = () => { setNodes([]); setEdges([]); setVisitedNodes(new Set()); setQueueNodes(new Set()); setIsAnimating(false); };
+  const clearAll = () => { setNodes([]); setEdges([]); setVisitedNodes(new Set()); setQueueNodes(new Set()); setIsAnimating(false); setSelectedNodesForRotation([]); };
   const getNode = (id: number) => nodes.find(n => n.id === id);
 
   const renderSidebarContent = () => {
@@ -342,6 +505,79 @@ function App() {
               </button>
             </div>
           </div>
+
+          {/* SEÇÃO DE ROTAÇÕES AVL - BOTÕES MANUAIS */}
+          <div className="border-t border-ponto-muted/30 pt-4">
+            <h2 className="text-sm font-bold text-ponto-accent uppercase tracking-wider mb-4">Rotações AVL</h2>
+            <div className="space-y-3">
+              <p className="text-xs text-slate-400">
+                {selectedNodesForRotation.length === 0 
+                  ? "Selecione a ferramenta de rotação (ícone de seta) e clique em 3 nós no grafo" 
+                  : selectedNodesForRotation.length < 3 
+                    ? `Nós selecionados: ${selectedNodesForRotation.length}/3`
+                    : "3 nós selecionados! Escolha a rotação:"}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleManualRotation('LL')}
+                  disabled={selectedNodesForRotation.length !== 3}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                    selectedNodesForRotation.length !== 3 
+                      ? 'bg-ponto-muted/30 border-slate-900 text-slate-500 cursor-not-allowed' 
+                      : 'bg-ponto-dark hover:bg-ponto-muted border-slate-900 text-white'
+                  }`}
+                >
+                  <RotateCcw size={20} />
+                  <span className="text-[10px] font-bold">LL (Dir.)</span>
+                </button>
+                <button
+                  onClick={() => handleManualRotation('RR')}
+                  disabled={selectedNodesForRotation.length !== 3}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                    selectedNodesForRotation.length !== 3 
+                      ? 'bg-ponto-muted/30 border-slate-900 text-slate-500 cursor-not-allowed' 
+                      : 'bg-ponto-dark hover:bg-ponto-muted border-slate-900 text-white'
+                  }`}
+                >
+                  <RotateCcw size={20} className="scale-x-[-1]" />
+                  <span className="text-[10px] font-bold">RR (Esq.)</span>
+                </button>
+                <button
+                  onClick={() => handleManualRotation('LR')}
+                  disabled={selectedNodesForRotation.length !== 3}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                    selectedNodesForRotation.length !== 3 
+                      ? 'bg-ponto-muted/30 border-slate-900 text-slate-500 cursor-not-allowed' 
+                      : 'bg-ponto-dark hover:bg-ponto-muted border-slate-900 text-white'
+                  }`}
+                >
+                  <RotateCcw size={20} />
+                  <span className="text-[10px] font-bold">LR (Esq.-Dir.)</span>
+                </button>
+                <button
+                  onClick={() => handleManualRotation('RL')}
+                  disabled={selectedNodesForRotation.length !== 3}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-b-4 transition-all active:border-b-0 active:translate-y-1 ${
+                    selectedNodesForRotation.length !== 3 
+                      ? 'bg-ponto-muted/30 border-slate-900 text-slate-500 cursor-not-allowed' 
+                      : 'bg-ponto-dark hover:bg-ponto-muted border-slate-900 text-white'
+                  }`}
+                >
+                  <RotateCcw size={20} className="scale-x-[-1]" />
+                  <span className="text-[10px] font-bold">RL (Dir.-Esq.)</span>
+                </button>
+              </div>
+              {selectedNodesForRotation.length > 0 && (
+                <button 
+                  onClick={() => setSelectedNodesForRotation([])}
+                  className="w-full text-xs text-slate-400 hover:text-white py-1"
+                >
+                  Limpar seleção ({selectedNodesForRotation.join(', ')})
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="border-t border-ponto-muted/30 pt-4">
              <h2 className="text-sm font-bold text-ponto-accent uppercase tracking-wider mb-2">Lista de Adjacência</h2>
              <div className="bg-ponto-darker rounded-lg border border-ponto-muted p-3 h-48 overflow-y-auto font-mono text-xs shadow-inner">
@@ -386,6 +622,7 @@ function App() {
                 <button onClick={() => setActiveTool('add-node')} className={`p-1.5 rounded transition-colors ${activeTool === 'add-node' ? 'bg-ponto-accent text-ponto-darker' : 'text-slate-300 hover:bg-ponto-muted/50'}`}><Circle size={18} /></button>
                 <button onClick={() => setActiveTool('add-edge')} className={`p-1.5 rounded transition-colors ${activeTool === 'add-edge' ? 'bg-ponto-accent text-ponto-darker' : 'text-slate-300 hover:bg-ponto-muted/50'}`}><MoveUpRight size={18} /></button>
                 <button onClick={() => setActiveTool('delete')} className={`p-1.5 rounded transition-colors ${activeTool === 'delete' ? 'bg-red-500 text-white' : 'text-slate-300 hover:bg-red-500/20 hover:text-red-400'}`}><Eraser size={18} /></button>
+                <button onClick={() => setActiveTool('select-rotation')} className={`p-1.5 rounded transition-colors ${activeTool === 'select-rotation' ? 'bg-ponto-accent text-ponto-darker' : 'text-slate-300 hover:bg-ponto-muted/50'}`} title="Selecionar nós para rotação"><RotateCcw size={18} /></button>
               </div>
               <button onClick={() => { setEdges([]); setIsDirected(!isDirected); }} className="flex items-center gap-2 rounded-full border border-ponto-muted px-3 py-1 text-xs font-semibold uppercase text-slate-300 hover:bg-ponto-dark">
                 {isDirected ? <ArrowRight size={14} className="text-ponto-accent"/> : <ArrowRightLeft size={14} className="text-slate-400"/>}
@@ -399,7 +636,7 @@ function App() {
 
       <div className="flex flex-1 overflow-hidden relative">
         <main className="flex-1 bg-slate-50 relative">
-          <svg className={`w-full h-full ${appMode === 'game' ? 'cursor-default' : activeTool === 'add-node' ? 'cursor-crosshair' : activeTool === 'delete' ? 'cursor-not-allowed' : 'cursor-default'}`} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleCanvasClick}>
+          <svg className={`w-full h-full ${appMode === 'game' ? 'cursor-default' : activeTool === 'add-node' ? 'cursor-crosshair' : activeTool === 'delete' ? 'cursor-not-allowed' : activeTool === 'select-rotation' ? 'pointer' : 'cursor-default'}`} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleCanvasClick}>
             <defs>
               <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="28" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#2c6455" /></marker>
             </defs>
@@ -431,10 +668,23 @@ function App() {
                   strokeColor = "stroke-yellow-600";
                   textColor = "fill-slate-900";
                 }
+                
+                // Highlight selected nodes for rotation
+                const isSelectedForRotation = activeTool === 'select-rotation' && selectedNodesForRotation.includes(node.id);
+                if (isSelectedForRotation) {
+                  fillColor = "fill-purple-500";
+                  strokeColor = "stroke-purple-300";
+                  textColor = "fill-white";
+                }
 
                 return (
-                  <g key={node.id} onMouseDown={(e) => handleNodeMouseDown(e, node.id)} onClick={(e) => handleNodeClick(e, node.id)} className="transition-all duration-500 ease-out group cursor-pointer hover:scale-105">
-                    <circle cx={node.x} cy={node.y} r={22} className={`stroke-[3px] transition-colors duration-300 ${fillColor} ${strokeColor} shadow-md ${connectionSourceId === node.id ? 'stroke-white stroke-[4px]' : ''}`} />
+                  <g 
+                    key={node.id} 
+                    onMouseDown={(e) => handleNodeMouseDown(e, node.id)} 
+                    onClick={(e) => handleNodeClick(e, node.id)} 
+                    className={`transition-all duration-500 ease-out group cursor-pointer hover:scale-105 ${isRotating ? 'node-rotating' : ''}`}
+                  >
+                    <circle cx={node.x} cy={node.y} r={22} className={`stroke-[3px] transition-colors duration-300 ${fillColor} ${strokeColor} shadow-md ${connectionSourceId === node.id ? 'stroke-white stroke-[4px]' : ''} ${isSelectedForRotation ? 'animate-pulse' : ''}`} />
                     <text x={node.x} y={node.y} dy=".3em" textAnchor="middle" className={`font-bold text-sm pointer-events-none select-none ${textColor}`}>{node.id}</text>
                   </g>
                 );
