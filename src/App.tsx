@@ -89,6 +89,8 @@ function App() {
   // --- ESTADOS DE ANIMAÇÃO ---
   const [selectedAlgo, setSelectedAlgo] = useState<'BFS' | 'DFS'>('BFS');
   const [startNodeId, setStartNodeId] = useState<string>('');
+  // Estado para permitir escolher o ID do nó manualmente
+  const [customNodeId, setCustomNodeId] = useState<string>('');
   const [isAnimating, setIsAnimating] = useState(false);
   const [visitedNodes, setVisitedNodes] = useState<Set<number>>(new Set());
   const [queueNodes, setQueueNodes] = useState<Set<number>>(new Set());
@@ -99,6 +101,10 @@ function App() {
   
   // --- ESTADO DE SELEÇÃO DE NÓS PARA ROTAÇÃO ---
   const [selectedNodesForRotation, setSelectedNodesForRotation] = useState<number[]>([]);
+  
+  // --- ESTADO DE ERRO PARA ROTAÇÃO INCORRETA ---
+  const [errorNodesForRotation, setErrorNodesForRotation] = useState<number[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   // === TIMER DA SPLASH SCREEN ===
   useEffect(() => {
@@ -188,11 +194,201 @@ useEffect(() => {
   };
 
   // --- LÓGICA DE ROTAÇÃO MANUAL (SANDBOX) ---
+  
+  // Função para validar se a rotação selecionada está correta
+  const validateRotationSelection = (selectedIds: number[], rotationType: 'LL' | 'RR' | 'LR' | 'RL'): { isValid: boolean; message: string } => {
+    if (selectedIds.length !== 3) {
+      return { isValid: false, message: 'Selecione exatamente 3 nós.' };
+    }
+
+    // Sort the node IDs to find the middle value
+    const sortedIds = [...selectedIds].sort((a, b) => a - b);
+    const smallest = sortedIds[0];
+    const middle = sortedIds[1];
+    const largest = sortedIds[2];
+
+    // For each rotation type, validate that the new parent will be the middle value
+    // and smaller values go to left, larger to right
+    switch (rotationType) {
+      case 'LL':
+        // LL rotation: the leftmost node (smallest) should become left child,
+        // the middle should become parent, the largest should become right child
+        // After right rotation, the root (originally middle in the chain) becomes the parent
+        // We need to check that the current structure is a left-leaning chain
+        // and the user wants to rotate to put middle as root
+        return { 
+          isValid: true, 
+          message: '' 
+        };
+      case 'RR':
+        // RR rotation: similar to LL but for right-leaning
+        return { 
+          isValid: true, 
+          message: '' 
+        };
+      case 'LR':
+        // LR rotation: left-right rotation, middle becomes root
+        return { 
+          isValid: true, 
+          message: '' 
+        };
+      case 'RL':
+        // RL rotation: right-left rotation, middle becomes root
+        return { 
+          isValid: true, 
+          message: '' 
+        };
+      default:
+        return { isValid: false, message: 'Tipo de rotação inválido.' };
+    }
+  };
+
+  // Função para validar se a rotação está correta
+  // Simplified: only checks if the rotation type matches the unbalanced structure
+  const validateRotationCorrectness = (
+    selectedIds: number[], 
+    currentEdges: Edge[],
+    rotationType: 'LL' | 'RR' | 'LR' | 'RL'
+  ): { isValid: boolean; errorIds: number[]; message: string } => {
+    if (selectedIds.length !== 3) {
+      return { isValid: false, errorIds: selectedIds, message: 'Selecione exatamente 3 nós.' };
+    }
+
+    const hasEdge = (s: number, t: number) => currentEdges.some(e => e.sourceId === s && e.targetId === t);
+    const hasEdgeEitherWay = (s: number, t: number) => hasEdge(s, t) || hasEdge(t, s);
+
+    // Check if selected nodes form a chain
+    let chainCount = 0;
+    for (const id of selectedIds) {
+      const hasParent = currentEdges.some(e => e.targetId === id && selectedIds.includes(e.sourceId));
+      const hasChild = currentEdges.some(e => e.sourceId === id && selectedIds.includes(e.targetId));
+      if (hasParent && hasChild) chainCount++; // middle of chain
+      else if (hasChild) chainCount++; // top of chain
+      else if (hasParent) chainCount++; // bottom of chain
+    }
+
+    // For a valid 3-node subtree, we need exactly a chain of 3
+    if (chainCount < 3) {
+      return { 
+        isValid: false, 
+        errorIds: selectedIds, 
+        message: 'Selecione 3 nós que estejam conectados em uma cadeia (pai -> filho -> neto).' 
+      };
+    }
+
+    // Find the chain direction by checking which node has no parent (in selected) - that's the root
+    const findRoot = () => {
+      for (const id of selectedIds) {
+        const hasParentInSelection = currentEdges.some(
+          e => e.targetId === id && selectedIds.includes(e.sourceId)
+        );
+        if (!hasParentInSelection) return id;
+      }
+      // If all have parents, pick the first one
+      return selectedIds[0];
+    };
+
+    const root = findRoot();
+    const rootChildren = currentEdges
+      .filter(e => e.sourceId === root && selectedIds.includes(e.targetId))
+      .map(e => e.targetId);
+
+    if (rootChildren.length !== 1) {
+      return { 
+        isValid: false, 
+        errorIds: selectedIds, 
+        message: 'Selecione uma cadeia de 3 nós (pai com 1 filho, que tem 1 filho).' 
+      };
+    }
+
+    const child = rootChildren[0];
+    const grandChildren = currentEdges
+      .filter(e => e.sourceId === child && selectedIds.includes(e.targetId))
+      .map(e => e.targetId);
+
+    if (grandChildren.length !== 1) {
+      return { 
+        isValid: false, 
+        errorIds: selectedIds, 
+        message: 'Selecione uma cadeia de 3 nós (pai com 1 filho, que tem 1 filho).' 
+      };
+    }
+
+    const grandchild = grandChildren[0];
+    
+    // Determine the current AVL case based on values
+    // In AVL: smaller values go left, larger go right
+    let currentCase: 'LL' | 'RR' | 'LR' | 'RL' | null = null;
+
+    // root -> child -> grandchild
+    // If child < root (child is left of root)
+    if (child < root) {
+      if (grandchild < child) {
+        // Left-Left case: both to the left
+        currentCase = 'LL';
+      } else if (grandchild > child) {
+        // Left-Right case: child left, grandchild right
+        currentCase = 'LR';
+      }
+    } else if (child > root) {
+      if (grandchild > child) {
+        // Right-Right case: both to the right
+        currentCase = 'RR';
+      } else if (grandchild < child) {
+        // Right-Left case: child right, grandchild left
+        currentCase = 'RL';
+      }
+    }
+
+    if (currentCase === null) {
+      return { 
+        isValid: false, 
+        errorIds: selectedIds, 
+        message: 'Não foi possível detectar o caso AVL. Selecione uma cadeia válida.' 
+      };
+    }
+
+    // Check if the user selected the correct rotation type
+    if (rotationType !== currentCase) {
+      const rotationNames: Record<string, string> = {
+        'LL': 'Rotação Simples à Direita (LL)',
+        'RR': 'Rotação Simples à Esquerda (RR)',
+        'LR': 'Rotação Dupla Esquerda-Direita (LR)',
+        'RL': 'Rotação Dupla Direita-Esquerda (RL)'
+      };
+      const correctRotation = rotationNames[currentCase];
+      return { 
+        isValid: false, 
+        errorIds: selectedIds, 
+        message: `Rotação incorreta! Este caso requer: ${correctRotation}` 
+      };
+    }
+
+    return { isValid: true, errorIds: [], message: '' };
+  };
+
   const handleManualRotation = (rotationType: 'LL' | 'RR' | 'LR' | 'RL') => {
     if (selectedNodesForRotation.length !== 3) {
       alert("Selecione exatamente 3 nós para aplicar a rotação.");
       return;
     }
+
+    // Validate the rotation selection
+    const validation = validateRotationCorrectness(selectedNodesForRotation, edges, rotationType);
+    
+    if (!validation.isValid) {
+      // Show error - paint nodes red
+      setErrorNodesForRotation(validation.errorIds);
+      setErrorMessage(validation.message);
+      
+      // Clear selection but keep error state for visual feedback
+      setSelectedNodesForRotation([]);
+      return;
+    }
+
+    // If validation passes, clear any previous error state
+    setErrorNodesForRotation([]);
+    setErrorMessage('');
 
     const [rootId, leftId, rightId] = selectedNodesForRotation;
     const selectedNodes = nodes.filter(n => selectedNodesForRotation.includes(n.id));
@@ -358,11 +554,39 @@ useEffect(() => {
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => { if (appMode === 'game') return; if (draggingNodeId !== null && activeTool === 'cursor') { const rect = e.currentTarget.getBoundingClientRect(); setNodes(prev => prev.map(n => n.id === draggingNodeId ? { ...n, x: e.clientX - rect.left, y: e.clientY - rect.top } : n)); } };
   const handleMouseUp = () => { if (draggingNodeId !== null) setDraggingNodeId(null); };
 
+  // Função chamada ao clicar no canvas (área de desenho)
+  // Permite criar nós em posições específicas
   const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (appMode === 'game') return;
+    if (appMode === 'game') return; // Não permite criar nós no modo jogo
     if (activeTool === 'add-node') {
       const rect = e.currentTarget.getBoundingClientRect();
-      const newId = nodes.length > 0 ? Math.max(...nodes.map(n => n.id)) + 1 : 0;
+      
+      // Determina o ID do nó: usa ID personalizado se fornecido, caso contrário gera automaticamente
+      let newId: number;
+      const customId = customNodeId.trim();
+      
+      if (customId !== '') {
+        // Se o usuário forneceu um ID customizado
+        const parsedId = parseInt(customId);
+        if (isNaN(parsedId)) {
+          alert('ID inválido. Use um número inteiro.');
+          return;
+        }
+        if (nodes.some(n => n.id === parsedId)) {
+          alert('Este ID já existe. Escolha outro.');
+          return;
+        }
+        newId = parsedId;
+      } else {
+        // Gera automaticamente o menor ID disponível
+        const usedIds = new Set(nodes.map(n => n.id));
+        newId = 0;
+        while (usedIds.has(newId)) {
+          newId++;
+        }
+      }
+      
+      // Cria o novo nó na posição clicada
       setNodes([...nodes, { id: newId, x: e.clientX - rect.left, y: e.clientY - rect.top }]);
     }
   };
@@ -374,6 +598,12 @@ useEffect(() => {
     
     // Handle node selection for rotation
     if (activeTool === 'select-rotation') {
+      // Clear error when user starts selecting new nodes
+      if (errorNodesForRotation.length > 0) {
+        setErrorNodesForRotation([]);
+        setErrorMessage('');
+      }
+      
       if (selectedNodesForRotation.includes(nodeId)) {
         // Deselect node
         setSelectedNodesForRotation(selectedNodesForRotation.filter(id => id !== nodeId));
@@ -399,7 +629,7 @@ useEffect(() => {
     }
   };
 
-  const clearAll = () => { setNodes([]); setEdges([]); setVisitedNodes(new Set()); setQueueNodes(new Set()); setIsAnimating(false); setSelectedNodesForRotation([]); };
+  const clearAll = () => { setNodes([]); setEdges([]); setVisitedNodes(new Set()); setQueueNodes(new Set()); setIsAnimating(false); setSelectedNodesForRotation([]); setErrorNodesForRotation([]); setErrorMessage(''); };
   const getNode = (id: number) => nodes.find(n => n.id === id);
 
   const renderSidebarContent = () => {
@@ -489,6 +719,27 @@ useEffect(() => {
 
     return (
       <div className="space-y-6">
+          {/* Seção para configurar o ID do nó antes de criá-lo */}
+          <div>
+            <h2 className="text-sm font-bold text-ponto-accent uppercase tracking-wider mb-4">Criar Nó</h2>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                 <input 
+                   type="text" 
+                   placeholder="ID do nó (deixe vazio para auto)" 
+                   value={customNodeId} 
+                   onChange={(e) => setCustomNodeId(e.target.value)} 
+                   className="w-full rounded-md border border-ponto-muted bg-ponto-darker text-white px-3 py-2 text-sm focus:border-ponto-accent focus:outline-none placeholder-slate-500"
+                 />
+              </div>
+              {customNodeId !== '' && (
+                <p className="text-xs text-slate-400">
+                  O próximo nó terá ID = {customNodeId}
+                </p>
+              )}
+            </div>
+          </div>
+
           <div>
             <h2 className="text-sm font-bold text-ponto-accent uppercase tracking-wider mb-4">Executar (Sandbox)</h2>
             <div className="space-y-3">
@@ -517,6 +768,14 @@ useEffect(() => {
                     ? `Nós selecionados: ${selectedNodesForRotation.length}/3`
                     : "3 nós selecionados! Escolha a rotação:"}
               </p>
+              
+              {/* Error message display */}
+              {errorMessage && (
+                <div className="bg-red-500/20 border border-red-500 text-red-300 text-xs p-3 rounded-lg mb-3 animate-pulse">
+                  <span className="font-bold">❌ Erro:</span> {errorMessage}
+                </div>
+              )}
+              
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => handleManualRotation('LL')}
@@ -569,7 +828,11 @@ useEffect(() => {
               </div>
               {selectedNodesForRotation.length > 0 && (
                 <button 
-                  onClick={() => setSelectedNodesForRotation([])}
+                  onClick={() => {
+                    setSelectedNodesForRotation([]);
+                    setErrorNodesForRotation([]);
+                    setErrorMessage('');
+                  }}
                   className="w-full text-xs text-slate-400 hover:text-white py-1"
                 >
                   Limpar seleção ({selectedNodesForRotation.join(', ')})
@@ -671,7 +934,13 @@ useEffect(() => {
                 
                 // Highlight selected nodes for rotation
                 const isSelectedForRotation = activeTool === 'select-rotation' && selectedNodesForRotation.includes(node.id);
-                if (isSelectedForRotation) {
+                const isErrorNode = errorNodesForRotation.includes(node.id);
+                
+                if (isErrorNode) {
+                  fillColor = "fill-red-600";
+                  strokeColor = "stroke-red-300";
+                  textColor = "fill-white";
+                } else if (isSelectedForRotation) {
                   fillColor = "fill-purple-500";
                   strokeColor = "stroke-purple-300";
                   textColor = "fill-white";
