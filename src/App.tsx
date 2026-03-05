@@ -244,7 +244,7 @@ useEffect(() => {
   };
 
   // Função para validar se a rotação está correta
-  // Simplified: only checks if the rotation type matches the unbalanced structure
+  // Allows selection of 3 nodes: either parent with 2 children OR parent-child-grandchild chain
   const validateRotationCorrectness = (
     selectedIds: number[], 
     currentEdges: Edge[],
@@ -255,88 +255,113 @@ useEffect(() => {
     }
 
     const hasEdge = (s: number, t: number) => currentEdges.some(e => e.sourceId === s && e.targetId === t);
-    const hasEdgeEitherWay = (s: number, t: number) => hasEdge(s, t) || hasEdge(t, s);
 
-    // Check if selected nodes form a chain
-    let chainCount = 0;
-    for (const id of selectedIds) {
-      const hasParent = currentEdges.some(e => e.targetId === id && selectedIds.includes(e.sourceId));
-      const hasChild = currentEdges.some(e => e.sourceId === id && selectedIds.includes(e.targetId));
-      if (hasParent && hasChild) chainCount++; // middle of chain
-      else if (hasChild) chainCount++; // top of chain
-      else if (hasParent) chainCount++; // bottom of chain
-    }
-
-    // For a valid 3-node subtree, we need exactly a chain of 3
-    if (chainCount < 3) {
-      return { 
-        isValid: false, 
-        errorIds: selectedIds, 
-        message: 'Selecione 3 nós que estejam conectados em uma cadeia (pai -> filho -> neto).' 
-      };
-    }
-
-    // Find the chain direction by checking which node has no parent (in selected) - that's the root
-    const findRoot = () => {
-      for (const id of selectedIds) {
-        const hasParentInSelection = currentEdges.some(
-          e => e.targetId === id && selectedIds.includes(e.sourceId)
-        );
-        if (!hasParentInSelection) return id;
+    // Try two types of structures:
+    // 1. Parent with 2 children (direct children)
+    // 2. Parent -> child -> grandchild chain
+    
+    // === Check for parent with 2 children ===
+    const findParentWithTwoChildren = () => {
+      for (const parent of selectedIds) {
+        const children = currentEdges
+          .filter(e => e.sourceId === parent && selectedIds.includes(e.targetId))
+          .map(e => e.targetId);
+        
+        if (children.length === 2) {
+          const [child1, child2] = children;
+          return { parent, child1, child2 };
+        }
       }
-      // If all have parents, pick the first one
-      return selectedIds[0];
+      return null;
     };
 
-    const root = findRoot();
-    const rootChildren = currentEdges
-      .filter(e => e.sourceId === root && selectedIds.includes(e.targetId))
-      .map(e => e.targetId);
+    // === Check for chain: parent -> child -> grandchild ===
+    const findChain = () => {
+      // Try each node as potential root
+      for (const root of selectedIds) {
+        const childrenOfRoot = currentEdges
+          .filter(e => e.sourceId === root && selectedIds.includes(e.targetId))
+          .map(e => e.targetId);
+        
+        for (const child of childrenOfRoot) {
+          const grandchildren = currentEdges
+            .filter(e => e.sourceId === child && selectedIds.includes(e.targetId))
+            .map(e => e.targetId);
+          
+          if (grandchildren.length > 0) {
+            for (const grandchild of grandchildren) {
+              return { root, child, grandchild };
+            }
+          }
+        }
+      }
+      return null;
+    };
 
-    if (rootChildren.length !== 1) {
+    // Try to find parent with 2 children first
+    const twoChildren = findParentWithTwoChildren();
+    const chain = findChain();
+
+    if (!twoChildren && !chain) {
       return { 
         isValid: false, 
         errorIds: selectedIds, 
-        message: 'Selecione uma cadeia de 3 nós (pai com 1 filho, que tem 1 filho).' 
+        message: 'Selecione: (1) um nó pai com 2 filhos, ou (2) uma cadeia: avô -> pai -> filho.' 
       };
     }
 
-    const child = rootChildren[0];
-    const grandChildren = currentEdges
-      .filter(e => e.sourceId === child && selectedIds.includes(e.targetId))
-      .map(e => e.targetId);
-
-    if (grandChildren.length !== 1) {
-      return { 
-        isValid: false, 
-        errorIds: selectedIds, 
-        message: 'Selecione uma cadeia de 3 nós (pai com 1 filho, que tem 1 filho).' 
-      };
-    }
-
-    const grandchild = grandChildren[0];
-    
-    // Determine the current AVL case based on values
-    // In AVL: smaller values go left, larger go right
+    // Determine the case based on which structure we found
+    let root: number, child: number, grandchild: number;
     let currentCase: 'LL' | 'RR' | 'LR' | 'RL' | null = null;
 
-    // root -> child -> grandchild
-    // If child < root (child is left of root)
-    if (child < root) {
-      if (grandchild < child) {
-        // Left-Left case: both to the left
+    if (twoChildren) {
+      // Parent with 2 children case
+      root = twoChildren.parent;
+      const { child1, child2 } = twoChildren;
+      
+      // Determine which is left and which is right based on values
+      const smaller = child1 < child2 ? child1 : child2;
+      const larger = child1 < child2 ? child2 : child1;
+      
+      if (smaller < root && larger < root) {
+        // Both children are to the left - LL case
         currentCase = 'LL';
-      } else if (grandchild > child) {
-        // Left-Right case: child left, grandchild right
-        currentCase = 'LR';
-      }
-    } else if (child > root) {
-      if (grandchild > child) {
-        // Right-Right case: both to the right
+        child = smaller;
+        grandchild = larger;
+      } else if (smaller > root && larger > root) {
+        // Both children are to the right - RR case
         currentCase = 'RR';
-      } else if (grandchild < child) {
-        // Right-Left case: child right, grandchild left
+        child = larger;
+        grandchild = smaller;
+      } else if (smaller < root && larger > root) {
+        // Left-right case - LR
+        currentCase = 'LR';
+        child = smaller;
+        grandchild = larger;
+      } else if (smaller > root && larger < root) {
+        // Right-left case - RL
         currentCase = 'RL';
+        child = larger;
+        grandchild = smaller;
+      }
+    } else if (chain) {
+      // Chain case
+      root = chain.root;
+      child = chain.child;
+      grandchild = chain.grandchild;
+      
+      if (child < root) {
+        if (grandchild < child) {
+          currentCase = 'LL';
+        } else if (grandchild > child) {
+          currentCase = 'LR';
+        }
+      } else if (child > root) {
+        if (grandchild > child) {
+          currentCase = 'RR';
+        } else if (grandchild < child) {
+          currentCase = 'RL';
+        }
       }
     }
 
@@ -344,7 +369,7 @@ useEffect(() => {
       return { 
         isValid: false, 
         errorIds: selectedIds, 
-        message: 'Não foi possível detectar o caso AVL. Selecione uma cadeia válida.' 
+        message: 'Não foi possível detectar o caso AVL.' 
       };
     }
 
@@ -356,11 +381,10 @@ useEffect(() => {
         'LR': 'Rotação Dupla Esquerda-Direita (LR)',
         'RL': 'Rotação Dupla Direita-Esquerda (RL)'
       };
-      const correctRotation = rotationNames[currentCase];
       return { 
         isValid: false, 
         errorIds: selectedIds, 
-        message: `Rotação incorreta! Este caso requer: ${correctRotation}` 
+        message: `Rotação incorreta! Este caso requer: ${rotationNames[currentCase]}` 
       };
     }
 
@@ -512,6 +536,9 @@ useEffect(() => {
     setNodes(newNodes);
     setEdges(newEdges);
     setSelectedNodesForRotation([]);
+    // Clear error state after successful rotation
+    setErrorNodesForRotation([]);
+    setErrorMessage('');
   };
 
   // --- LÓGICA DO MODO SANDBOX RESTAURADA ---
