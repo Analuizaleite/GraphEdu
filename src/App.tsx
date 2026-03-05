@@ -1,14 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
+// Ícones utilizados na interface
 import { Circle, Play, Trash2, MousePointer2, MoveUpRight, RotateCcw, ArrowRightLeft, ArrowRight, Eraser, Gamepad2, Wrench } from 'lucide-react';
+// Algoritmos de busca e caminho
 import { generateBFSSteps } from './algorithms/bfs';
 import { generateDFSSteps } from './algorithms/dfs';
+import { generateDijkstraSteps } from './algorithms/dijkstra';
+// Algoritmos de árvore AVL
 import { performRightRotation, performLeftRotation, performLRRotation, performRLRotation } from './algorithms/avl';
 import { getBalancedEdges, detectAVLCase } from './algorithms/balancing';
 
 interface Node { id: number; x: number; y: number; }
+// Interface para representar uma aresta no grafo
 interface Edge { sourceId: number; targetId: number; weight: number; }
 
 // --- BANCO DE FASES (LEVELS) ---
+// Array contendo todas as fases do jogo
 const LEVELS = [
   {
     level: 1,
@@ -65,30 +71,59 @@ const LEVELS = [
       { sourceId: 2, targetId: 1, weight: 1 },
       { sourceId: 1, targetId: 0, weight: 1 }
     ]
+  },
+  {
+    level: 4,
+    title: "Caminho Mínimo (Dijkstra)",
+    description: "Use o algoritmo de Dijkstra para encontrar o caminho mais curto do nó 0 ao nó 4. Escolha sempre o vizinho com menor distância acumulada!",
+    algo: 'DIJKSTRA',
+    expectedVisits: [0, 2, 1, 3, 4],
+    startNodeId: 0,
+    targetNodeId: 4,
+    nodes: [
+      { id: 0, x: 100, y: 200 },
+      { id: 1, x: 250, y: 100 },
+      { id: 2, x: 250, y: 300 },
+      { id: 3, x: 400, y: 100 },
+      { id: 4, x: 400, y: 300 }
+    ],
+    edges: [
+      { sourceId: 0, targetId: 1, weight: 4 },
+      { sourceId: 0, targetId: 2, weight: 2 },
+      { sourceId: 1, targetId: 2, weight: 1 },
+      { sourceId: 1, targetId: 3, weight: 3 },
+      { sourceId: 2, targetId: 3, weight: 5 },
+      { sourceId: 2, targetId: 4, weight: 8 },
+      { sourceId: 3, targetId: 4, weight: 2 }
+    ]
   }
 ];
 
 function App() {
   // === ESTADO DA SPLASH SCREEN ===
+  // Controla a exibição da tela de abertura
   const [showSplash, setShowSplash] = useState(true);
 
-  const [appMode, setAppMode] = useState<'sandbox' | 'game'>('sandbox');
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [isDirected, setIsDirected] = useState(false);
+  // === ESTADOS DO MODO SANDBOX ===
+  const [appMode, setAppMode] = useState<'sandbox' | 'game'>('sandbox'); // Modo atual: sandbox ou jogo
+  const [nodes, setNodes] = useState<Node[]>([]); // Lista de nós do grafo
+  const [edges, setEdges] = useState<Edge[]>([]); // Lista de arestas do grafo
+  const [isDirected, setIsDirected] = useState(false); // Se o grafo é dirigido
+  
+  // Ferramenta ativa no modo sandbox
   const [activeTool, setActiveTool] = useState<'cursor' | 'add-node' | 'add-edge' | 'delete' | 'select-rotation'>('add-node');
-  const [connectionSourceId, setConnectionSourceId] = useState<number | null>(null);
-  const [draggingNodeId, setDraggingNodeId] = useState<number | null>(null);
+  const [connectionSourceId, setConnectionSourceId] = useState<number | null>(null); // ID do nó de origem ao criar aresta
+  const [draggingNodeId, setDraggingNodeId] = useState<number | null>(null); // ID do nó sendo arrastado
 
   // --- ESTADOS DO JOGO ---
-  const [currentLevelIndex, setCurrentLevelIndex] = useState(0);
-  const [lives, setLives] = useState(3);
-  const [gameStatus, setGameStatus] = useState<'playing' | 'won' | 'lost'>('playing');
-  const [playerPath, setPlayerPath] = useState<number[]>([]);
+  const [currentLevelIndex, setCurrentLevelIndex] = useState(0); // Índice da fase atual
+  const [lives, setLives] = useState(3); // Vidas restantes
+  const [gameStatus, setGameStatus] = useState<'playing' | 'won' | 'lost'>('playing'); // Status do jogo
+  const [playerPath, setPlayerPath] = useState<number[]>([]); // Caminho percorrido pelo jogador
 
   // --- ESTADOS DE ANIMAÇÃO ---
-  const [selectedAlgo, setSelectedAlgo] = useState<'BFS' | 'DFS'>('BFS');
-  const [startNodeId, setStartNodeId] = useState<string>('');
+  const [selectedAlgo, setSelectedAlgo] = useState<'BFS' | 'DFS'>('BFS'); // Algoritmo selecionado no sandbox
+  const [startNodeId, setStartNodeId] = useState<string>(''); // Nó inicial para executar algoritmo
   // Estado para permitir escolher o ID do nó manualmente
   const [customNodeId, setCustomNodeId] = useState<string>('');
   const [isAnimating, setIsAnimating] = useState(false);
@@ -103,10 +138,11 @@ function App() {
   const [selectedNodesForRotation, setSelectedNodesForRotation] = useState<number[]>([]);
   
   // --- ESTADO DE ERRO PARA ROTAÇÃO INCORRETA ---
-  const [errorNodesForRotation, setErrorNodesForRotation] = useState<number[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [errorNodesForRotation, setErrorNodesForRotation] = useState<number[]>([]); // Nós que ficarão vermelhos em caso de erro
+  const [errorMessage, setErrorMessage] = useState<string>(''); // Mensagem de erro a ser exibida
 
   // === TIMER DA SPLASH SCREEN ===
+  // Timer para esconder a tela de abertura após 3 segundos
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowSplash(false);
@@ -127,7 +163,7 @@ function App() {
 
 
 useEffect(() => {
-  // Limpa timeout ao desmontar
+  // Limpa timeout ao desmontar o componente
   return () => {
     if (rotationTimeoutRef.current) {
       clearTimeout(rotationTimeoutRef.current);
@@ -137,6 +173,7 @@ useEffect(() => {
 
 
 
+  // Função para resetar o estado do jogo
   const resetGame = () => {
     setLives(3);
     setGameStatus('playing');
@@ -145,6 +182,7 @@ useEffect(() => {
     setQueueNodes(new Set());
   };
 
+  // Função para ir para a próxima fase
   const nextLevel = () => {
     if (currentLevelIndex < LEVELS.length - 1) {
       setCurrentLevelIndex(prev => prev + 1);
@@ -153,10 +191,68 @@ useEffect(() => {
     }
   };
 
+  // Manipula o clique em um nó durante o jogo
   const handleGameNodeClick = (nodeId: number) => {
-    if (gameStatus !== 'playing' || LEVELS[currentLevelIndex].algo === 'AVL') return;
-    if (playerPath.includes(nodeId)) return;
+    if (gameStatus !== 'playing') return;
+    
     const currentLevel = LEVELS[currentLevelIndex];
+    
+    // Pula para níveis AVL (tratados separadamente)
+    if (currentLevel.algo === 'AVL') return;
+    
+    // Tratamento do Dijkstra - deve seguir o caminho mais curto
+    if (currentLevel.algo === 'DIJKSTRA') {
+      const startNodeId = currentLevel.startNodeId;
+      const targetNodeId = currentLevel.targetNodeId;
+      
+      // Primeiro nó deve ser o inicial
+      if (playerPath.length === 0) {
+        if (nodeId === startNodeId) {
+          setPlayerPath([nodeId]);
+          setVisitedNodes(prev => new Set(prev).add(nodeId));
+        } else {
+          const newLives = lives - 1;
+          setLives(newLives);
+          if (newLives <= 0) setGameStatus('lost');
+        }
+        return;
+      }
+      
+      // Verifica se o nó está conectado ao último nó visitado
+      const lastNode = playerPath[playerPath.length - 1];
+      const isConnected = edges.some(e => 
+        (e.sourceId === lastNode && e.targetId === nodeId) ||
+        (e.targetId === lastNode && e.sourceId === nodeId)
+      );
+      
+      if (!isConnected) {
+        const newLives = lives - 1;
+        setLives(newLives);
+        if (newLives <= 0) setGameStatus('lost');
+        return;
+      }
+      
+      // Verifica se este é o próximo nó correto no caminho mais curto
+      const nextExpectedIndex = playerPath.length;
+      if (nodeId === currentLevel.expectedVisits[nextExpectedIndex]) {
+        const newPath = [...playerPath, nodeId];
+        setPlayerPath(newPath);
+        setVisitedNodes(prev => new Set(prev).add(nodeId));
+        
+        // Verifica se chegou ao destino
+        if (nodeId === targetNodeId) {
+          setGameStatus('won');
+        }
+      } else {
+        const newLives = lives - 1;
+        setLives(newLives);
+        if (newLives <= 0) setGameStatus('lost');
+      }
+      return;
+    }
+    
+    // Tratamento de BFS e DFS
+    if (playerPath.includes(nodeId)) return;
     const nextExpectedIndex = playerPath.length;
     
     if (nodeId === currentLevel.expectedVisits[nextExpectedIndex]) {
@@ -171,6 +267,7 @@ useEffect(() => {
     }
   };
 
+  // Tratamento do desafio de rotação no nível AVL
   const handleRotationChallenge = (direction: 'left' | 'right') => {
     if (currentLevelIndex !== 2 || gameStatus !== 'playing') return;
 
@@ -541,10 +638,12 @@ useEffect(() => {
     setErrorMessage('');
   };
 
-  // --- LÓGICA DO MODO SANDBOX RESTAURADA ---
+  // --- LÓGICA DO MODO SANDBOX --- // Renderiza a lista de adjacência do grafo
   const renderAdjacencyList = () => {
     return nodes.map(node => {
+      // Obtém os vizinhos de saída (arestas origem -> destino)
       const neighbors = edges.filter(e => e.sourceId === node.id).map(e => `${e.targetId}(w:${e.weight})`);
+      // Para grafos não dirigidos, também mostra vizinhos de entrada
       if (!isDirected) {
         const reverseNeighbors = edges.filter(e => e.targetId === node.id).map(e => `${e.sourceId}(w:${e.weight})`);
         neighbors.push(...reverseNeighbors);
@@ -553,15 +652,18 @@ useEffect(() => {
     });
   };
 
+  // Executa o algoritmo de busca selecionado (BFS ou DFS)
   const runAlgorithmSandbox = () => {
     const startId = parseInt(startNodeId);
     if (isNaN(startId) || !nodes.find(n => n.id === startId)) { alert("Nó inválido. Adicione o ID de início."); return; }
     
+    // Gera os passos do algoritmo
     let steps = selectedAlgo === 'BFS' ? generateBFSSteps(startId, nodes.length, edges, isDirected) : generateDFSSteps(startId, nodes.length, edges, isDirected);
     
     setIsAnimating(true); setVisitedNodes(new Set()); setQueueNodes(new Set());
     
     let currentStep = 0;
+    // Intervalo para animacao dos passos
     const intervalId = setInterval(() => {
       if (currentStep >= steps.length) { clearInterval(intervalId); setIsAnimating(false); return; }
       const step = steps[currentStep];
@@ -574,9 +676,12 @@ useEffect(() => {
     }, 700);
   };
 
+  // Remove um nó e todas as suas arestas
   const deleteNode = (id: number) => { setNodes(nodes.filter(n => n.id !== id)); setEdges(edges.filter(e => e.sourceId !== id && e.targetId !== id)); };
+  // Remove uma aresta pelo índice
   const deleteEdge = (index: number) => setEdges(edges.filter((_, i) => i !== index));
   
+  // Manipulador de mouse para arrastar nós
   const handleNodeMouseDown = (e: React.MouseEvent, nodeId: number) => { if (appMode === 'game') return; if (activeTool === 'cursor') { e.stopPropagation(); setDraggingNodeId(nodeId); } };
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => { if (appMode === 'game') return; if (draggingNodeId !== null && activeTool === 'cursor') { const rect = e.currentTarget.getBoundingClientRect(); setNodes(prev => prev.map(n => n.id === draggingNodeId ? { ...n, x: e.clientX - rect.left, y: e.clientY - rect.top } : n)); } };
   const handleMouseUp = () => { if (draggingNodeId !== null) setDraggingNodeId(null); };
@@ -618,24 +723,25 @@ useEffect(() => {
     }
   };
 
+  // Manipulador de clique em um nó
   const handleNodeClick = (e: React.MouseEvent, nodeId: number) => {
     e.stopPropagation();
     if (appMode === 'game') { handleGameNodeClick(nodeId); return; }
     if (activeTool === 'delete') { deleteNode(nodeId); return; }
     
-    // Handle node selection for rotation
+    // Tratamento de seleção de nós para rotação
     if (activeTool === 'select-rotation') {
-      // Clear error when user starts selecting new nodes
+      // Limpa erro quando usuário começa a selecionar novos nós
       if (errorNodesForRotation.length > 0) {
         setErrorNodesForRotation([]);
         setErrorMessage('');
       }
       
       if (selectedNodesForRotation.includes(nodeId)) {
-        // Deselect node
+        // Desmarca nó
         setSelectedNodesForRotation(selectedNodesForRotation.filter(id => id !== nodeId));
       } else if (selectedNodesForRotation.length < 3) {
-        // Select node (max 3)
+        // Seleciona nó (máximo 3)
         setSelectedNodesForRotation([...selectedNodesForRotation, nodeId]);
       }
       return;
@@ -656,6 +762,7 @@ useEffect(() => {
     }
   };
 
+  // Limpa todo o grafo e estados relacionados
   const clearAll = () => { setNodes([]); setEdges([]); setVisitedNodes(new Set()); setQueueNodes(new Set()); setIsAnimating(false); setSelectedNodesForRotation([]); setErrorNodesForRotation([]); setErrorMessage(''); };
   const getNode = (id: number) => nodes.find(n => n.id === id);
 
@@ -717,6 +824,20 @@ useEffect(() => {
                     <span className="text-[10px] font-bold">DIREITA (LL)</span>
                   </button>
                 </div>
+              </div>
+            )}
+
+            {currentLevel.algo === 'DIJKSTRA' && gameStatus === 'playing' && (
+              <div className="space-y-3 mt-4">
+                <div className="bg-ponto-dark rounded p-3 flex justify-between items-center">
+                  <span className="text-xs text-slate-400">Início:</span>
+                  <span className="font-bold text-green-400">Nó {currentLevel.startNodeId}</span>
+                </div>
+                <div className="bg-ponto-dark rounded p-3 flex justify-between items-center">
+                  <span className="text-xs text-slate-400">Destino:</span>
+                  <span className="font-bold text-red-400">Nó {currentLevel.targetNodeId}</span>
+                </div>
+                <p className="text-xs text-slate-400 text-center">Encontre o caminho mínimo!</p>
               </div>
             )}
 
@@ -934,12 +1055,14 @@ useEffect(() => {
               const s = getNode(edge.sourceId); const t = getNode(edge.targetId);
               if (!s || !t) return null;
               const midX = (s.x + t.x) / 2; const midY = (s.y + t.y) / 2;
+              const isDijkstraLevel = appMode === 'game' && currentLevelIndex < LEVELS.length && LEVELS[currentLevelIndex].algo === 'DIJKSTRA';
+              const showWeight = appMode === 'sandbox' || isDijkstraLevel;
               return (
                 <g key={i} onClick={(e) => { e.stopPropagation(); if (appMode === 'sandbox' && activeTool === 'delete') deleteEdge(i); }} className={`group ${appMode === 'sandbox' && activeTool === 'delete' ? 'cursor-pointer' : ''}`}>
                   <line x1={s.x} y1={s.y} x2={t.x} y2={t.y} stroke="transparent" strokeWidth="15" />
                   <line x1={s.x} y1={s.y} x2={t.x} y2={t.y} stroke="#2c6455" strokeWidth="3" markerEnd={isDirected ? "url(#arrowhead)" : undefined} className={`transition-colors opacity-60 ${appMode === 'sandbox' && activeTool === 'delete' ? 'group-hover:stroke-red-500 opacity-100' : ''}`} />
-                  {appMode === 'sandbox' && <rect x={midX - 10} y={midY - 10} width="20" height="20" rx="4" fill="#05272d" className="stroke-[#3aebb9] stroke-1" />}
-                  {appMode === 'sandbox' && <text x={midX} y={midY} dy=".3em" textAnchor="middle" className="text-[10px] font-bold fill-[#3aebb9] select-none pointer-events-none">{edge.weight}</text>}
+                  {showWeight && <rect x={midX - 10} y={midY - 10} width="20" height="20" rx="4" fill="#05272d" className="stroke-[#3aebb9] stroke-1" />}
+                  {showWeight && <text x={midX} y={midY} dy=".3em" textAnchor="middle" className="text-[10px] font-bold fill-[#3aebb9] select-none pointer-events-none">{edge.weight}</text>}
                 </g>
               );
             })}
